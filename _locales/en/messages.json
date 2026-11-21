@@ -1,0 +1,539 @@
+{
+  "actionTitle": {
+    "message": "Merlin Settings"
+  },
+  "command_saveMail": {
+    "message": "Send the displayed or selected email to Merlin"
+  },
+  "contextMenu_saveLink": {
+    "message": "Save link"
+  },
+  "contextMenu_saveLinkWithTags": {
+    "message": "Save link with tags…"
+  },
+  "contextMenu_saveMail": {
+    "message": "Send email to Merlin"
+  },
+  "contextMenu_saveMailContent": {
+    "message": "Send email content to Merlin"
+  },
+  "contextMenu_saveMailContentWithTags": {
+    "message": "Save email content with tags…"
+  },
+  "contextMenu_saveMailWithTags": {
+    "message": "Save email with tags…"
+  },
+  "contextMenu_savePage": {
+    "message": "Save page to Merlin"
+  },
+  "contextMenu_savePageWithTags": {
+    "message": "Save page with tags…"
+  },
+  "contextMenu_sendLink": {
+    "message": "Send link to Merlin"
+  },
+  "extDescription": {
+    "message": "Save any link to your Merlin app with a single right-click."
+  },
+  "extName": {
+    "message": "Merlin"
+  },
+  "flyout_addedToReadingList": {
+    "message": "Added to your reading list."
+  },
+  "flyout_articleAdded": {
+    "message": "Article added"
+  },
+  "flyout_articleAddedTagsFailed": {
+    "message": "Article added, but these tags could not be applied: $tags$",
+    "placeholders": {
+      "tags": {
+        "content": "$1"
+      }
+    }
+  },
+  "flyout_articleAddedWithTags": {
+    "message": "Article added [$tags$]",
+    "placeholders": {
+      "tags": {
+        "content": "$1"
+      }
+    }
+  },
+  "flyout_authFailed": {
+    "message": "Authentication failed — check your app password."
+  },
+  "flyout_authFailedRetry": {
+    "message": "Login rejected by the server. If this happens again, you will be logged out."
+  },
+  "flyout_connectionFailed": {
+    "message": "Connection failed: $error$",
+    "placeholders": {
+      "error": {
+        "content": "$1"
+      }
+    }
+  },
+  "flyout_httpBlocked": {
+    "message": "Your server URL uses unencrypted http://. Please switch to https:// in the settings."
+  },
+  "flyout_mailReadFailed": {
+    "message": "The email could not be read."
+  },
+  "flyout_mailSaved": {
+    "message": "Email saved"
+  },
+  "flyout_mailSavedTagsFailed": {
+    "message": "Email saved, but these tags could not be applied: $tags$",
+    "placeholders": {
+      "tags": {
+        "content": "$1"
+      }
+    }
+  },
+  "flyout_mailSavedWithTags": {
+    "message": "Email saved [$tags$]",
+    "placeholders": {
+      "tags": {
+        "content": "$1"
+      }
+    }
+  },
+  "flyout_mailsSaved": {
+    "message": "Emails saved: $count$",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "flyout_mailsSavedPartial": {
+    "message": "$saved$ of $total$ emails saved",
+    "placeholders": {
+      "saved": {
+        "content": "$1"
+      },
+      "total": {
+        "content": "$2"
+      }
+    }
+  },
+  "flyout_noMailSelected": {
+    "message": "No email selected."
+  },
+  "flyout_saving": {
+    "message": "Saving to Merlin…"
+  },
+  "flyout_serverError": {
+    "message": "Server error: HTTP $code$",
+    "placeholders": {
+      "code": {
+        "content": "$1"
+      }
+    }
+  },
+  "flyout_timeout": {
+    "message": "The server did not respond in time."
+  },
+  "flyout_unsupportedSite": {
+    "message": "Not supported: $domain$ doesn't provide readable article text.",
+    "placeholders": {
+      "domain": {
+        "content": "$1"
+      }
+    }
+  },
+  "flyout_urlSaved": {
+    "message": "URL saved"
+  },
+  "flyout_urlSavedTagsFailed": {
+    "message": "URL saved, but these tags could not be applied: $tags$",
+    "placeholders": {
+      "tags": {
+        "content": "$1"
+      }
+    }
+  },
+  "flyout_urlSavedWithTags": {
+    "message": "URL saved [$tags$]",
+    "placeholders": {
+      "tags": {
+        "content": "$1"
+      }
+    }
+  },
+  "messageDisplayAction_title": {
+    "message": "Send email to Merlin"
+  },
+  "notification_authFailedMessage": {
+    "message": "Merlin: Login failed – please log in again"
+  },
+  "notification_authFailedTitle": {
+    "message": "Merlin: Login failed"
+  },
+  "notification_configureCredentials": {
+    "message": "Please configure your credentials first."
+  },
+  "notification_defaultTitle": {
+    "message": "Merlin"
+  },
+  "notification_errorTitle": {
+    "message": "Merlin: Error"
+  },
+  "notification_loadingTitle": {
+    "message": "Merlin…"
+  },
+  "notification_needsPermission": {
+    "message": "Merlin needs permission for this server — please log in again in the settings."
+  },
+  "notification_savedTitle": {
+    "message": "Merlin: Saved ✓"
+  },
+  "notification_unsupportedSiteMessage": {
+    "message": "Merlin: This site isn't supported ($domain$)",
+    "placeholders": {
+      "domain": {
+        "content": "$1"
+      }
+    }
+  },
+  "options_backendNextcloud": {
+    "message": "Nextcloud"
+  },
+  "options_backendStandalone": {
+    "message": "Standalone server"
+  },
+  "options_cancelLogin": {
+    "message": "Cancel login…"
+  },
+  "options_cannotOpenLogin": {
+    "message": "Could not open login page: $error$",
+    "placeholders": {
+      "error": {
+        "content": "$1"
+      }
+    }
+  },
+  "options_cannotReach": {
+    "message": "Cannot reach server: $error$",
+    "placeholders": {
+      "error": {
+        "content": "$1"
+      }
+    }
+  },
+  "options_cannotStartPolling": {
+    "message": "Could not start background polling: $error$",
+    "placeholders": {
+      "error": {
+        "content": "$1"
+      }
+    }
+  },
+  "options_closeTab": {
+    "message": "Close tab"
+  },
+  "options_completeLogin": {
+    "message": "Complete the login in the new tab…"
+  },
+  "options_connecting": {
+    "message": "Connecting to Nextcloud…"
+  },
+  "options_connectingShort": {
+    "message": "Connecting…"
+  },
+  "options_couldNotSave": {
+    "message": "Could not save: $error$",
+    "placeholders": {
+      "error": {
+        "content": "$1"
+      }
+    }
+  },
+  "options_disconnected": {
+    "message": "Disconnected. Please log in again."
+  },
+  "options_enterUrlFirst": {
+    "message": "Please enter your URL first."
+  },
+  "options_enterUrlPlain": {
+    "message": "Please enter your URL."
+  },
+  "options_headerSubtitle": {
+    "message": "Extension Settings"
+  },
+  "options_headerSubtitleExtension": {
+    "message": "Merlin Extension Settings"
+  },
+  "options_httpBlocked": {
+    "message": "Unencrypted http:// is only allowed for localhost. Please use https://."
+  },
+  "options_httpWarning": {
+    "message": "Warning: this URL uses http:// — your app password will be sent unencrypted. Use https:// if possible."
+  },
+  "options_loggedInAs": {
+    "message": "Logged in as $name$. Settings saved.",
+    "placeholders": {
+      "name": {
+        "content": "$1"
+      }
+    }
+  },
+  "options_loggedOut": {
+    "message": "Logged out. Credentials removed from this device."
+  },
+  "options_loggedOutWelcome": {
+    "message": "Logged out. Enter your URL and click \"Login with Nextcloud\" to get started."
+  },
+  "options_loggedOutWelcomeStandalone": {
+    "message": "Logged out. Enter your server URL and click \"Log in\" to get started."
+  },
+  "options_loginButton": {
+    "message": "Login with Nextcloud"
+  },
+  "options_loginButtonStandalone": {
+    "message": "Log in"
+  },
+  "options_loginCancelled": {
+    "message": "Login cancelled."
+  },
+  "options_loginFirst": {
+    "message": "Please log in first."
+  },
+  "options_loginInvalidResponse": {
+    "message": "The server sent an invalid login response."
+  },
+  "options_loginTimeout": {
+    "message": "Login timed out after 5 minutes. Please try again."
+  },
+  "options_logoutButton": {
+    "message": "Disconnect"
+  },
+  "options_logoutButtonShort": {
+    "message": "Log out"
+  },
+  "options_needsPermission": {
+    "message": "Merlin needs permission to access this server to continue."
+  },
+  "options_pageTitle": {
+    "message": "Merlin"
+  },
+  "options_pageTitleExtension": {
+    "message": "Merlin — Extension Settings"
+  },
+  "options_saveSettingsButton": {
+    "message": "Save settings"
+  },
+  "options_securityEnterUrl": {
+    "message": "Enter your URL first."
+  },
+  "options_securityHint": {
+    "message": "Manage app passwords in Nextcloud →"
+  },
+  "options_securityLink": {
+    "message": "Settings → Security → App passwords"
+  },
+  "options_sourceCodeLink": {
+    "message": "Source code on GitHub"
+  },
+  "options_testAuthFailed": {
+    "message": "Authentication failed. Please log in again via \"Login with Nextcloud\"."
+  },
+  "options_testAuthFailedStandalone": {
+    "message": "Authentication failed. Please log in again via \"Log in\"."
+  },
+  "options_testButton": {
+    "message": "Test connection"
+  },
+  "options_testFailed": {
+    "message": "Connection failed: $error$",
+    "placeholders": {
+      "error": {
+        "content": "$1"
+      }
+    }
+  },
+  "options_testNotFound": {
+    "message": "Merlin app not found. Is it installed and the URL correct?"
+  },
+  "options_testServerError": {
+    "message": "Server returned HTTP $code$.",
+    "placeholders": {
+      "code": {
+        "content": "$1"
+      }
+    }
+  },
+  "options_testSuccess": {
+    "message": "Connection successful! Merlin app is reachable."
+  },
+  "options_testTimeout": {
+    "message": "Connection timed out. Check the URL and your network."
+  },
+  "options_testing": {
+    "message": "Testing…"
+  },
+  "options_urlChangedLoginAgain": {
+    "message": "The URL was changed. Please log in with the new URL first."
+  },
+  "options_urlHint": {
+    "message": "The base URL of your Merlin instance - either a Nextcloud or a standalone server"
+  },
+  "options_urlHintShort": {
+    "message": "The base URL of your Nextcloud instance (no trailing slash needed)"
+  },
+  "options_urlLabel": {
+    "message": "URL to your Merlin instance"
+  },
+  "options_urlPlaceholder": {
+    "message": "cloud.example.com"
+  },
+  "options_urlPlaceholderFull": {
+    "message": "https://cloud.example.com"
+  },
+  "options_urlSaved": {
+    "message": "URL saved. Use \"Login with Nextcloud\" to authenticate."
+  },
+  "options_urlSavedStandalone": {
+    "message": "URL saved. Use \"Log in\" to authenticate."
+  },
+  "options_welcome": {
+    "message": "Welcome! Enter your URL and click \"Login with Nextcloud\" to get started."
+  },
+  "options_welcomeStandalone": {
+    "message": "Welcome! Enter your server URL and click \"Log in\" to get started."
+  },
+  "passphrase_activeHint": {
+    "message": "Encrypted sync is active."
+  },
+  "passphrase_applyButton": {
+    "message": "Apply"
+  },
+  "passphrase_changeButton": {
+    "message": "Change passphrase"
+  },
+  "passphrase_enableButton": {
+    "message": "Enable encrypted sync"
+  },
+  "passphrase_enableError": {
+    "message": "Could not enable sync: $error$",
+    "placeholders": {
+      "error": {
+        "content": "$1"
+      }
+    }
+  },
+  "passphrase_enableHint": {
+    "message": "Set a passphrase to allow your login to sync (encrypted) across your devices."
+  },
+  "passphrase_enabled": {
+    "message": "Encrypted sync is now active."
+  },
+  "passphrase_enterPassphrase": {
+    "message": "Please enter the passphrase."
+  },
+  "passphrase_label": {
+    "message": "Encryption passphrase"
+  },
+  "passphrase_loginFirst": {
+    "message": "Please log in first."
+  },
+  "passphrase_noSyncedLogin": {
+    "message": "No synced login found."
+  },
+  "passphrase_placeholder": {
+    "message": "Passphrase"
+  },
+  "passphrase_setPlaceholder": {
+    "message": "•••••••• (set — enter a new one to change)"
+  },
+  "passphrase_syncUnavailable": {
+    "message": "Sync unavailable: $error$",
+    "placeholders": {
+      "error": {
+        "content": "$1"
+      }
+    }
+  },
+  "passphrase_tooShort": {
+    "message": "Please enter a passphrase of at least 8 characters."
+  },
+  "passphrase_unlockButton": {
+    "message": "Unlock"
+  },
+  "passphrase_unlockHint": {
+    "message": "An encrypted login was found via sync. Enter its passphrase to use it on this device."
+  },
+  "passphrase_unlockedAs": {
+    "message": "Unlocked as $name$.",
+    "placeholders": {
+      "name": {
+        "content": "$1"
+      }
+    }
+  },
+  "passphrase_wrongPassphrase": {
+    "message": "Wrong passphrase, or the synced data is corrupted."
+  },
+  "saveDialog_authFailed": {
+    "message": "Authentication failed — please log in again"
+  },
+  "saveDialog_authFailedRetry": {
+    "message": "Login rejected by the server. If this happens again, you will be logged out."
+  },
+  "saveDialog_cancel": {
+    "message": "Cancel"
+  },
+  "saveDialog_existingTags": {
+    "message": "Existing tags"
+  },
+  "saveDialog_mailCount": {
+    "message": "Emails: $count$",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "saveDialog_noCredentials": {
+    "message": "No credentials available"
+  },
+  "saveDialog_noMatchingTags": {
+    "message": "No matching tags"
+  },
+  "saveDialog_noTags": {
+    "message": "No tags yet"
+  },
+  "saveDialog_optional": {
+    "message": "(optional)"
+  },
+  "saveDialog_pageTitle": {
+    "message": "Merlin — Save article"
+  },
+  "saveDialog_save": {
+    "message": "Save"
+  },
+  "saveDialog_subtitle": {
+    "message": "Add article to reading list"
+  },
+  "saveDialog_tagsHint": {
+    "message": "Separate multiple tags with commas"
+  },
+  "saveDialog_tagsLabel": {
+    "message": "Tags"
+  },
+  "saveDialog_tagsLoadError": {
+    "message": "Could not load tags (HTTP $code$)",
+    "placeholders": {
+      "code": {
+        "content": "$1"
+      }
+    }
+  },
+  "saveDialog_tagsPlaceholder": {
+    "message": "e.g. tech, news, reading"
+  },
+  "saveDialog_tagsTimeout": {
+    "message": "Timed out while loading tags"
+  }
+}
