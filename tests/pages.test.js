@@ -147,7 +147,7 @@ test('options: standalone wording and localized labels', async () => {
   assert.equal(await page.textContent('#statusText'), en('options_welcomeStandalone'));
   assert.equal(await page.textContent('[data-i18n="options_backendStandalone"]'), en('options_backendStandalone'));
   assert.equal(await page.textContent('.source-link'), en('options_sourceCodeLink'));
-  assert.equal(await page.getAttribute('.source-link', 'href'), 'https://github.com/dexxes/merlin-chrome');
+  assert.equal(await page.getAttribute('.source-link', 'href'), 'https://github.com/dexxes/merlin-chromium');
   page.assertNoErrors();
   await page.close();
 });

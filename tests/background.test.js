@@ -67,7 +67,7 @@ function loadBackground() {
     scripting: {
       executeScript: async ({ func, args }) => {
         if (func.name === 'renderFlyout') {
-          env.injected.push(args.slice(0, 2));
+          env.injected.push([args[0], args[1]]); // outer-realm array for deepEqual
           return [{ result: env.toastResult }];
         }
         return [{ result: '<html>page</html>' }];
@@ -249,11 +249,11 @@ test('closing the dialog window removes its pending entry', async () => {
 
 test('messages are answered synchronously and only from this extension', async () => {
   let answer = null;
-  await env.ev.msg.fire({ type: 'merlin:cancelLoginPoll' }, { id: 'me' }, r => { answer = r; });
+  await env.ev.msg.fire({ type: 'merlin:cancelLoginPoll' }, { id: 'me' }, r => { answer = r && { ...r }; });
   assert.deepEqual(answer, { ok: true });
 
   answer = null;
-  await env.ev.msg.fire({ type: 'merlin:startLoginPoll', pollEndpoint: 'https://evil.example/p', pollToken: 't', serverUrl: 'https://evil.example' }, { id: 'other' }, r => { answer = r; });
+  await env.ev.msg.fire({ type: 'merlin:startLoginPoll', pollEndpoint: 'https://evil.example/p', pollToken: 't', serverUrl: 'https://evil.example' }, { id: 'other' }, r => { answer = r && { ...r }; });
   assert.equal(answer, null);
   assert.ok(!('_merlinLoginFlow' in env.store));
 });
