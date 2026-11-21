@@ -1,8 +1,8 @@
-# Privacy Policy — Merlin for Chrome and Edge
+# Privacy Policy — Merlin Reading List (browser extension)
 
 _Last updated: 2026-11-21_
 
-Merlin for Chrome and Edge ("the extension") saves web pages and links to a Merlin
+Merlin Reading List ("the extension") saves web pages and links to a Merlin
 reading list on a server that **you** run or choose: a Nextcloud instance with the
 Merlin app, or a Merlin standalone server. The extension has no server, analytics or
 tracking of its own. The developer does not receive, collect or have access to any of

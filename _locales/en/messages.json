@@ -38,6 +38,9 @@
   "extName": {
     "message": "Merlin"
   },
+  "extNameChromium": {
+    "message": "Merlin Reading List"
+  },
   "flyout_addedToReadingList": {
     "message": "Added to your reading list."
   },
