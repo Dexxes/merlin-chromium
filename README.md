@@ -123,7 +123,7 @@ When you save, the extension sends the URL (and for page saves the rendered HTML
 to 10 MB) plus your login to the Merlin server you configured. Nothing is sent anywhere
 else, and nothing is sent without a context-menu click. If you enable encrypted sync,
 an encrypted copy of your login is stored in Chrome Sync; the passphrase never leaves
-the device.
+the device. Full details: [PRIVACY.md](PRIVACY.md).
 
 ## License
 
