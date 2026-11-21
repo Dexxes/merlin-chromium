@@ -48,11 +48,6 @@
       color: #0082c9;
       line-height: 1.2;
     }
-    .header-text p {
-      font-size: 13px;
-      color: #777;
-      margin-top: 4px;
-    }
 
     /* Form fields */
     .field {
@@ -86,50 +81,6 @@
       color: #999;
       margin-top: 5px;
       line-height: 1.5;
-    }
-    .field .hint a {
-      color: #0082c9;
-      text-decoration: none;
-    }
-    .field .hint a:hover { text-decoration: underline; }
-
-    /* URL-Eingabe mit fest sichtbarem https://-Präfix — http ist serverseitig
-       nicht erlaubt, daher kann der Nutzer es gar nicht erst eintippen. */
-    .url-input-group {
-      display: flex;
-      align-items: stretch;
-      border: 1.5px solid #dde1e7;
-      border-radius: 9px;
-      background: #f8f9fa;
-      transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
-      overflow: hidden;
-    }
-    .url-input-group:focus-within {
-      border-color: #0082c9;
-      background: #fff;
-      box-shadow: 0 0 0 3px rgba(0, 130, 201, 0.12);
-    }
-    .url-prefix {
-      display: flex;
-      align-items: center;
-      padding: 10px 0 10px 14px;
-      font-size: 14px;
-      color: #888;
-      background: transparent;
-      user-select: none;
-      white-space: nowrap;
-    }
-    .url-input-group input {
-      flex: 1;
-      width: auto;
-      border: none;
-      border-radius: 0;
-      background: transparent;
-      padding: 10px 14px 10px 4px;
-    }
-    .url-input-group input:focus {
-      box-shadow: none;
-      background: transparent;
     }
 
     /* Nextcloud Login Flow button */
@@ -192,6 +143,11 @@
     .btn-secondary {
       background: #eef0f3;
       color: #444;
+    }
+    .btn-block {
+      width: 100%;
+      justify-content: center;
+      margin-top: 10px;
     }
     .btn-secondary:not(:disabled):hover { background: #e0e3e8; }
 
@@ -263,6 +219,25 @@
     }
     .backend-toggle input { width: auto; margin: 0; }
     .backend-toggle input:checked + span { color: #0082c9; }
+
+    /* Source code link */
+    .field .hint a,
+    .hint a {
+      color: #0082c9;
+      text-decoration: none;
+    }
+    .hint a:hover { text-decoration: underline; }
+
+    .source-link {
+      display: block;
+      text-align: center;
+      margin-top: 22px;
+      font-size: 12px;
+      color: #999;
+      text-decoration: none;
+      transition: color 0.15s;
+    }
+    .source-link:hover { color: #0082c9; }
   </style>
 </head>
 <body>
@@ -273,7 +248,6 @@
       <img src="icons/icon-128.png" alt="Merlin icon">
       <div class="header-text">
         <h1>Merlin</h1>
-        <p data-i18n="options_headerSubtitleExtension">Nextcloud Extension Settings</p>
       </div>
     </div>
 
@@ -281,28 +255,25 @@
     <div class="backend-toggle">
       <label>
         <input type="radio" name="backendKind" id="backendKindNextcloud" value="nextcloud" checked>
-        <span>Nextcloud</span>
+        <span data-i18n="options_backendNextcloud">Nextcloud</span>
       </label>
       <label>
         <input type="radio" name="backendKind" id="backendKindStandalone" value="standalone">
-        <span>Standalone-Server</span>
+        <span data-i18n="options_backendStandalone">Standalone server</span>
       </label>
     </div>
 
-    <!-- Nextcloud URL -->
+    <!-- Server URL -->
     <div class="field">
-      <label for="nextcloudUrl" data-i18n="options_urlLabel">Nextcloud URL</label>
-      <div class="url-input-group">
-        <span class="url-prefix" aria-hidden="true">https://</span>
-        <input
-          type="text"
-          id="nextcloudUrl"
-          placeholder="cloud.example.com"
-          data-i18n-placeholder="options_urlPlaceholder"
-          autocomplete="off"
-          spellcheck="false">
-      </div>
-      <p class="hint" data-i18n="options_urlHint">The base URL of your Nextcloud instance — HTTPS is required and added automatically (no trailing slash needed)</p>
+      <label for="nextcloudUrl" data-i18n="options_urlLabel">URL to your Merlin instance</label>
+      <input
+        type="url"
+        id="nextcloudUrl"
+        placeholder="https://cloud.example.com"
+        data-i18n-placeholder="options_urlPlaceholderFull"
+        autocomplete="off"
+        spellcheck="false">
+      <p class="hint" data-i18n="options_urlHint">The base URL of your Merlin instance - either a Nextcloud or a standalone server</p>
     </div>
 
     <!-- Nextcloud Login Flow -->
@@ -318,8 +289,8 @@
       <button class="btn btn-primary" id="testBtn" type="button" disabled>
         <span data-i18n="options_testButton">Test connection</span>
       </button>
-      <button class="btn btn-secondary" id="logoutBtn" type="button" disabled>
-        <span data-i18n="options_logoutButtonShort">Log out</span>
+      <button class="btn btn-secondary" id="logoutBtn" type="button" style="display:none;">
+        <span data-i18n="options_logoutButton">Disconnect</span>
       </button>
     </div>
 
@@ -328,21 +299,23 @@
       <a href="#" id="openSecurityLink" data-i18n="options_securityLink">Settings → Security → App passwords</a>
     </p>
 
-    <!-- Encrypted sync passphrase -->
-    <div class="divider"></div>
-    <div class="field" id="passphraseSection" style="display: none;">
-      <label for="passphraseInput" data-i18n="passphrase_label">Encryption passphrase</label>
-      <input
-        type="password"
-        id="passphraseInput"
-        autocomplete="off"
-        spellcheck="false"
-        placeholder="Passphrase"
-        data-i18n-placeholder="passphrase_placeholder">
-      <p class="hint" id="passphraseHint"></p>
-      <button class="btn btn-secondary" id="passphraseBtn" type="button" style="margin-top: 10px; width: 100%; justify-content: center;">
-        <span data-i18n="passphrase_applyButton">Apply</span>
-      </button>
+    <!-- Encrypted sync passphrase (opt-in, see common.js) -->
+    <div id="passphraseSection" style="display: none;">
+      <div class="divider"></div>
+      <div class="field">
+        <label for="passphraseInput" data-i18n="passphrase_label">Encryption passphrase</label>
+        <input
+          type="password"
+          id="passphraseInput"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="Passphrase"
+          data-i18n-placeholder="passphrase_placeholder">
+        <p class="hint" id="passphraseHint"></p>
+        <button class="btn btn-secondary btn-block" id="passphraseBtn" type="button">
+          <span data-i18n="passphrase_applyButton">Apply</span>
+        </button>
+      </div>
     </div>
 
     <!-- Status message -->
@@ -351,9 +324,13 @@
       <span id="statusText"></span>
     </div>
 
+    <!-- Source code -->
+    <a class="source-link" href="https://github.com/dexxes/merlin-chrome" target="_blank" rel="noopener noreferrer" data-i18n="options_sourceCodeLink">Source code on GitHub</a>
+
   </div>
 
   <script src="crypto.js"></script>
+  <script src="common.js"></script>
   <script src="i18n.js"></script>
   <script src="options.js"></script>
 </body>

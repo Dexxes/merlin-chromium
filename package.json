@@ -1,0 +1,12 @@
+{
+  "name": "merlin-chrome",
+  "private": true,
+  "description": "Development tooling for the Merlin Chrome extension (not part of the store .zip)",
+  "license": "AGPL-3.0-or-later",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  },
+  "devDependencies": {
+    "playwright": "1.63.0"
+  }
+}

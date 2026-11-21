@@ -1,16 +1,32 @@
 'use strict';
 
-const MENU_ID_LINK = 'merlin-send-link';
-const MENU_ID_PAGE = 'merlin-save-page';
+// A Manifest V3 service worker has exactly one entry file, so the shared
+// helpers (t, sleep, credentials, URL checks, auth-failure handling, tag API
+// helpers) are pulled in here. crypto.js comes first: setCredentials() in
+// common.js keeps the optional encrypted sync copy current.
+importScripts('crypto.js', 'common.js');
 
-// ─── i18n shorthand ───────────────────────────────────────────────────────────
-// Liest lokalisierte Strings aus _locales/<lang>/messages.json (generiert aus
-// localization/strings/*.json via tools/i18n/export.py). `subs` ist optional
-// und wird auf die $1/$2-Platzhalter der jeweiligen Message abgebildet.
-const t = (key, subs) => chrome.i18n.getMessage(key, subs);
+const MENU_ID_LINK      = 'merlin-send-link';
+const MENU_ID_LINK_TAGS = 'merlin-send-link-tags';
+const MENU_ID_PAGE      = 'merlin-save-page';
+const MENU_ID_PAGE_TAGS = 'merlin-save-page-tags';
+
+// Upper bound for the page HTML sent along with a page save. Larger pages
+// (e.g. with embedded data: images) are saved by URL only, and the server
+// fetches them itself.
+const MAX_HTML_BYTES = 10 * 1024 * 1024;
+
+// Request timeouts. Saving gets more time because it may upload up to
+// 10 MB of HTML.
+const SAVE_TIMEOUT_MS = 60_000;
+const TAGS_TIMEOUT_MS = 10_000;
+
+const PENDING_SAVE_PREFIX = '_merlinPendingSave_';
+const LOGIN_POLL_ALARM    = 'merlin-login-poll';
+const SAVE_DIALOG_SIZE    = { width: 460, height: 640 };
 
 // ─── Logo as base64 data URL ──────────────────────────────────────────────────
-// Pages block moz-extension:// URLs via CSP, so we convert the icon once to
+// Pages block chrome-extension:// URLs via CSP, so we convert the icon once to
 // an inline data URL and pass it as an argument into the injected function.
 
 let _logoDataUrl = null;
@@ -18,10 +34,9 @@ let _logoDataUrl = null;
 async function getLogoDataUrl() {
   if (_logoDataUrl) return _logoDataUrl;
   try {
-    // FileReader is not available in Chrome service workers — use arrayBuffer instead.
+    // FileReader is not available in service workers — encode via arrayBuffer.
     const resp   = await fetch(chrome.runtime.getURL('icons/icon-128.png'));
-    const buffer = await resp.arrayBuffer();
-    const bytes  = new Uint8Array(buffer);
+    const bytes  = new Uint8Array(await resp.arrayBuffer());
     const binary = Array.from(bytes, b => String.fromCharCode(b)).join('');
     _logoDataUrl = `data:image/png;base64,${btoa(binary)}`;
   } catch {
@@ -30,7 +45,310 @@ async function getLogoDataUrl() {
   return _logoDataUrl;
 }
 
+// ─── Migration: storage.sync → storage.local ─────────────────────────────────
+//
+// Version 1.0 briefly kept the app password in plain text in
+// chrome.storage.sync, which Chrome Sync distributes without end-to-end
+// encryption. Existing installs move it to storage.local once; afterwards
+// storage.sync only ever holds the optional encrypted copy (credEnc).
+async function migrateCredentialsToLocal() {
+  try {
+    const synced = await chrome.storage.sync.get(CREDENTIAL_KEYS);
+    const toMigrate = Object.fromEntries(
+      Object.entries(synced).filter(([, v]) => v !== undefined),
+    );
+    if (Object.keys(toMigrate).length === 0) return;
+    await chrome.storage.local.set(toMigrate);
+    await chrome.storage.sync.remove(CREDENTIAL_KEYS);
+  } catch {
+    // storage.sync may be unavailable — then there is nothing to migrate
+  }
+}
+
+chrome.runtime.onInstalled.addListener(migrateCredentialsToLocal);
+
+// ─── Login Flow polling ───────────────────────────────────────────────────────
+//
+// Polling runs here rather than on the options page: Chrome opens the options
+// page from the toolbar as a popup, which closes as soon as the login tab
+// takes focus and takes its JS context with it.
+//
+// The service worker itself may be stopped by Chrome after ~30 s without
+// events. While polling, every round calls extension APIs, which keeps it
+// alive; should it be stopped anyway, the full flow state lives in
+// storage.local (_merlinLoginFlow) and an alarm wakes the worker every 30 s.
+// If no poll is running in memory at that point, it resumes from the stored
+// state; once the deadline has passed, the flow ends with a timeout message
+// instead of hanging silently.
+
+const LOGIN_FLOW_TIMEOUT_MS = 5 * 60 * 1000;
+const LOGIN_POLL_INTERVAL_MS = 2000;
+
+let _lfTimer  = null;
+let _lfActive = false;
+
+async function startBackgroundLoginPoll({ pollEndpoint, pollToken, serverUrl, loginTabId, backendKind }) {
+  _lfStopTimer();
+
+  // The poll token (and the response carrying the app password) may only be
+  // exchanged with the server the user entered.
+  if (typeof pollToken !== 'string' || !pollToken
+      || !sameOrigin(pollEndpoint, serverUrl) || !isAllowedServerUrl(pollEndpoint)) {
+    await chrome.storage.local.set({ _merlinLoginFlowResult: { error: t('options_loginInvalidResponse') } });
+    return;
+  }
+
+  const flow = {
+    active: true,
+    loginTabId,
+    pollEndpoint,
+    pollToken,
+    serverUrl,
+    backendKind,
+    deadline: Date.now() + LOGIN_FLOW_TIMEOUT_MS,
+  };
+  await chrome.storage.local.set({ _merlinLoginFlow: flow });
+  await chrome.alarms.create(LOGIN_POLL_ALARM, { periodInMinutes: 0.5 });
+
+  _lfRun(flow, LOGIN_POLL_INTERVAL_MS);
+}
+
+function _lfStopTimer() {
+  _lfActive = false;
+  clearTimeout(_lfTimer);
+  _lfTimer = null;
+}
+
+function _lfRun(flow, delayMs) {
+  _lfActive = true;
+
+  async function poll() {
+    if (!_lfActive) return;
+
+    if (Date.now() > flow.deadline) {
+      await _lfFinish({ error: t('options_loginTimeout') });
+      return;
+    }
+
+    try {
+      const r = await fetch(flow.pollEndpoint, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body:    `token=${encodeURIComponent(flow.pollToken)}`,
+        signal:  AbortSignal.timeout(5_000),
+      });
+
+      if (r.status === 404) {
+        // Not yet authorised — check again shortly
+        if (_lfActive) _lfTimer = setTimeout(poll, LOGIN_POLL_INTERVAL_MS);
+        return;
+      }
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+
+      const creds = await r.json();
+      if (!_lfActive) return;
+
+      await _lfFinish({ creds, serverUrl: flow.serverUrl, backendKind: flow.backendKind });
+    } catch {
+      // Transient network error — keep retrying
+      if (_lfActive) _lfTimer = setTimeout(poll, LOGIN_POLL_INTERVAL_MS);
+    }
+  }
+
+  _lfTimer = setTimeout(poll, delayMs);
+}
+
+// Resumes a stored flow after Chrome stopped the service worker (alarm) or
+// the browser restarted (onStartup).
+async function resumeBackgroundLoginPoll() {
+  if (_lfActive) return;
+  const { _merlinLoginFlow: flow } = await chrome.storage.local.get('_merlinLoginFlow');
+  if (!flow?.active) {
+    await chrome.alarms.clear(LOGIN_POLL_ALARM);
+    return;
+  }
+  if (Date.now() > flow.deadline) {
+    await _lfFinish({ error: t('options_loginTimeout') });
+    return;
+  }
+  _lfRun(flow, 0);
+}
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === LOGIN_POLL_ALARM) resumeBackgroundLoginPoll();
+});
+chrome.runtime.onStartup.addListener(resumeBackgroundLoginPoll);
+
+async function cancelBackgroundLoginPoll() {
+  _lfStopTimer();
+  await chrome.alarms.clear(LOGIN_POLL_ALARM);
+  await chrome.storage.local.remove('_merlinLoginFlow');
+  await chrome.storage.local.set({ _merlinLoginFlowResult: { cancelled: true } });
+}
+
+async function _lfFinish({ creds, serverUrl, backendKind, error }) {
+  _lfStopTimer();
+  await chrome.alarms.clear(LOGIN_POLL_ALARM);
+
+  const { _merlinLoginFlow } = await chrome.storage.local.get('_merlinLoginFlow');
+  const loginTabId = _merlinLoginFlow?.loginTabId;
+  await chrome.storage.local.remove('_merlinLoginFlow');
+
+  if (!error) {
+    const valid = creds
+      && typeof creds.loginName === 'string' && creds.loginName
+      && typeof creds.appPassword === 'string' && creds.appPassword;
+    if (!valid) error = t('options_loginInvalidResponse');
+  }
+
+  if (error) {
+    await chrome.storage.local.set({ _merlinLoginFlowResult: { error } });
+    return;
+  }
+
+  // The poll response may only replace the server URL if it is same-origin
+  // with the URL the user entered — otherwise a compromised server could
+  // silently redirect future save traffic (including the newly issued app
+  // password) to another origin.
+  const finalServerUrl = serverBase(sameOrigin(creds.server, serverUrl) ? creds.server : serverUrl);
+  await setCredentials({
+    nextcloudUrl: finalServerUrl,
+    username:     creds.loginName,
+    appPassword:  creds.appPassword,
+    backendKind,
+  });
+  await resetAuthFailures();
+
+  if (loginTabId != null) chrome.tabs.remove(loginTabId).catch(() => {});
+
+  // Notify the options page via storage (in case it is still open)
+  await chrome.storage.local.set({
+    _merlinLoginFlowResult: {
+      success:   true,
+      serverUrl: finalServerUrl,
+      loginName: creds.loginName,
+    },
+  });
+
+  // Return to the settings: focuses an open options page or opens a new one —
+  // important when the popup already closed while the login tab opened.
+  chrome.runtime.openOptionsPage().catch(() => {});
+}
+
+// ─── Message handler ──────────────────────────────────────────────────────────
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  // Only accept messages from this extension's own pages (options page, save
+  // dialog) — keeps a future content script or another extension from
+  // calling startBackgroundLoginPoll() with its own endpoint/server values.
+  if (sender.id !== chrome.runtime.id) return;
+
+  if (msg.type === 'merlin:startLoginPoll') {
+    startBackgroundLoginPoll(msg);
+  } else if (msg.type === 'merlin:cancelLoginPoll') {
+    cancelBackgroundLoginPoll();
+  } else if (msg.type === 'merlin:saveWithTags') {
+    handleSaveWithTags(msg.saveId, msg.tags ?? []);
+  } else if (msg.type === 'merlin:cancelSave') {
+    takePendingSave(msg.saveId).then(p => {
+      if (p?.windowId != null) chrome.windows.remove(p.windowId).catch(() => {});
+    });
+  } else {
+    return;
+  }
+  // Answered synchronously: the work above runs on, and the pages only need
+  // to know the message arrived.
+  sendResponse({ ok: true });
+});
+
+// ─── Pending saves (tag dialog) ───────────────────────────────────────────────
+//
+// Each open tag dialog gets its own entry (its own ID instead of one global
+// slot), so several open dialogs don't overwrite each other. The entry holds
+// no credentials — they are read fresh via getCredentials() when saving.
+// Closing the dialog with the window's close button cleans up the entry via
+// windows.onRemoved; leftovers from the previous session are removed on
+// browser startup.
+
+function pendingSaveKey(saveId) {
+  return `${PENDING_SAVE_PREFIX}${saveId}`;
+}
+
+async function takePendingSave(saveId) {
+  if (typeof saveId !== 'string' || !saveId) return null;
+  const key = pendingSaveKey(saveId);
+  const { [key]: pending } = await chrome.storage.local.get(key);
+  await chrome.storage.local.remove(key);
+  return pending ?? null;
+}
+
+async function removePendingSaves(filter) {
+  const all = await chrome.storage.local.get(null);
+  const keys = Object.keys(all).filter(k => k.startsWith(PENDING_SAVE_PREFIX) && filter(all[k]));
+  if (keys.length) await chrome.storage.local.remove(keys);
+}
+
+chrome.windows.onRemoved.addListener((windowId) => {
+  removePendingSaves(p => p?.windowId === windowId).catch(() => {});
+});
+chrome.runtime.onStartup.addListener(() => {
+  removePendingSaves(() => true).catch(() => {});
+});
+
+// ─── Save with tags (called from the save dialog) ─────────────────────────────
+
+async function handleSaveWithTags(saveId, tags) {
+  // Take the entry first, then close the window — otherwise windows.onRemoved
+  // could clean it up before we read it.
+  const pending = await takePendingSave(saveId);
+  if (!pending) return;
+  if (pending.windowId != null) chrome.windows.remove(pending.windowId).catch(() => {});
+
+  const { url, tabId, isPage } = pending;
+  const creds = await getCredentials();
+  if (!creds.nextcloudUrl || !creds.username || !creds.appPassword) {
+    await injectFlyout(tabId, t('notification_configureCredentials'), 'error');
+    return;
+  }
+
+  await injectFlyout(tabId, t('flyout_saving'), 'loading');
+
+  // The HTML is only captured now, so it never has to sit in storage.local.
+  // The tab still exists: the save dialog is a separate popup window.
+  let html = null;
+  if (isPage && tabId != null) html = await captureTabHtml(tabId);
+
+  await saveToMerlin({ ...creds, url, tabId, tags, html });
+}
+
+// ─── HTML capture for page saves ──────────────────────────────────────────────
+
+async function captureTabHtml(tabId) {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      // Runs in the page. Pages over the limit return null and are saved by
+      // URL only. The UTF-16 length is never larger than the UTF-8 byte
+      // size, hence the cheap pre-check.
+      func: (maxBytes) => {
+        const html = document.documentElement.outerHTML;
+        if (html.length > maxBytes) return null;
+        return new Blob([html]).size > maxBytes ? null : html;
+      },
+      args: [MAX_HTML_BYTES],
+    });
+    return results?.[0]?.result ?? null;
+  } catch {
+    // Scripting blocked (chrome:// pages, Chrome Web Store, PDF viewer) —
+    // save by URL only.
+    return null;
+  }
+}
+
 // ─── Context menu setup ───────────────────────────────────────────────────────
+//
+// Menu items persist across service worker restarts and browser restarts, so
+// they only need to be created on install and update (onInstalled).
 
 function setupContextMenu() {
   chrome.contextMenus.removeAll(() => {
@@ -40,167 +358,42 @@ function setupContextMenu() {
       contexts: ['link'],
     });
     chrome.contextMenus.create({
+      id:       MENU_ID_LINK_TAGS,
+      title:    t('contextMenu_saveLinkWithTags'),
+      contexts: ['link'],
+    });
+    chrome.contextMenus.create({
       id:       MENU_ID_PAGE,
       title:    t('contextMenu_savePage'),
+      contexts: ['page', 'selection', 'image'],
+    });
+    chrome.contextMenus.create({
+      id:       MENU_ID_PAGE_TAGS,
+      title:    t('contextMenu_savePageWithTags'),
       contexts: ['page', 'selection', 'image'],
     });
   });
 }
 
 chrome.runtime.onInstalled.addListener(setupContextMenu);
-chrome.runtime.onStartup.addListener(setupContextMenu);
-
-// ─── Migration: storage.sync → storage.local ─────────────────────────────────
-//
-// Vor diesem Fix landete das App-Passwort in chrome.storage.sync und wurde von
-// Google unverschlüsselt über alle angemeldeten Geräte synchronisiert. Bestandsnutzer
-// mit Daten in storage.sync müssen einmalig auf storage.local umgezogen werden,
-// danach wird storage.sync für diese Keys nicht mehr angefasst.
-chrome.runtime.onInstalled.addListener(async () => {
-  const CREDENTIAL_KEYS = ['nextcloudUrl', 'username', 'appPassword'];
-  const synced = await chrome.storage.sync.get(CREDENTIAL_KEYS);
-  const toMigrate = Object.fromEntries(
-    Object.entries(synced).filter(([, v]) => v !== undefined),
-  );
-  if (Object.keys(toMigrate).length === 0) return;
-
-  await chrome.storage.local.set(toMigrate);
-  await chrome.storage.sync.remove(CREDENTIAL_KEYS);
-});
-
-// ─── Login Flow polling ───────────────────────────────────────────────────────
-//
-// Polling läuft hier im Service Worker, nicht in der Options-Seite: Chrome
-// öffnet die Options-Seite per Toolbar-Klick als Popup (default_popup); sobald
-// der neue Login-Tab den Fokus bekommt, schließt sich das Popup automatisch und
-// zerstört seinen JS-Kontext — ein dort laufendes Polling würde damit abreißen.
-// Zusätzlich kann Chrome den MV3-Service-Worker nach ~30 s Inaktivität jederzeit
-// terminieren; eine setTimeout-Kette würde das nicht überleben. chrome.alarms
-// weckt den Service Worker dagegen zuverlässig wieder auf (auch nach Terminierung),
-// daher läuft das Polling über einen wiederkehrenden Alarm statt über setTimeout.
-// Der Fortschritt liegt in storage.local, damit pollLoginOnce() nach einem
-// Wake-up genau da weitermacht, wo der Service Worker vorher stand.
-
-const LOGIN_POLL_ALARM = 'merlin-login-poll';
-
-async function startBackgroundLoginPoll({ pollEndpoint, pollToken, serverUrl, loginTabId, backendKind }) {
-  await chrome.storage.local.set({
-    _merlinLoginFlow: {
-      active:   true,
-      loginTabId,
-      pollEndpoint,
-      pollToken,
-      serverUrl,
-      backendKind,
-      deadline: Date.now() + 5 * 60 * 1000, // 5-Minuten-Timeout
-    },
-  });
-  // periodInMinutes wird von Chrome auf minimal 0.5 (30 s) geklemmt — für einen
-  // einmaligen Login-Vorgang ist diese Latenz akzeptabel.
-  chrome.alarms.create(LOGIN_POLL_ALARM, { delayInMinutes: 0.5, periodInMinutes: 0.5 });
-  await pollLoginOnce(); // erster Versuch sofort, nicht erst beim ersten Alarm-Tick
-}
-
-async function cancelBackgroundLoginPoll() {
-  chrome.alarms.clear(LOGIN_POLL_ALARM);
-  await chrome.storage.local.remove('_merlinLoginFlow');
-  await chrome.storage.local.set({ _merlinLoginFlowResult: { cancelled: true } });
-}
-
-async function pollLoginOnce() {
-  const { _merlinLoginFlow: flow } = await chrome.storage.local.get('_merlinLoginFlow');
-  if (!flow?.active) return;
-
-  if (Date.now() > flow.deadline) {
-    await _lfFinish({ error: t('options_loginTimeout') });
-    return;
-  }
-
-  try {
-    const r = await fetch(flow.pollEndpoint, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body:    `token=${encodeURIComponent(flow.pollToken)}`,
-      signal:  AbortSignal.timeout(5_000),
-    });
-
-    if (r.status === 404) return; // noch nicht autorisiert — nächster Alarm-Tick versucht erneut
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-
-    const creds = await r.json();
-    await _lfFinish({ creds, serverUrl: flow.serverUrl, loginTabId: flow.loginTabId, backendKind: flow.backendKind });
-  } catch {
-    // Transienter Netzwerkfehler — nächster Alarm-Tick versucht erneut
-  }
-}
-
-chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === LOGIN_POLL_ALARM) pollLoginOnce();
-});
-
-async function _lfFinish({ creds, serverUrl, loginTabId, backendKind, error }) {
-  chrome.alarms.clear(LOGIN_POLL_ALARM);
-  await chrome.storage.local.remove('_merlinLoginFlow');
-
-  if (error) {
-    await chrome.storage.local.set({ _merlinLoginFlowResult: { error } });
-    return;
-  }
-
-  // storage.local statt storage.sync: das App-Passwort darf nicht über
-  // Google-Sync unverschlüsselt auf andere Geräte verteilt werden. Chrome hat —
-  // im Unterschied zu Firefox/Thunderbird — keine native Ende-zu-Ende-Verschlüsselung
-  // für storage.sync; die optionale Custom-Passphrase-Verschlüsselung (crypto.js,
-  // options.js) bleibt deshalb für Chrome bestehen.
-  const finalServerUrl = (creds.server || serverUrl).replace(/\/$/, '');
-  await chrome.storage.local.set({
-    nextcloudUrl: finalServerUrl,
-    username:     creds.loginName,
-    appPassword:  creds.appPassword,
-    backendKind,
-  });
-
-  if (loginTabId != null) chrome.tabs.remove(loginTabId).catch(() => {});
-
-  await chrome.storage.local.set({
-    _merlinLoginFlowResult: {
-      success:   true,
-      serverUrl: finalServerUrl,
-      loginName: creds.loginName,
-    },
-  });
-
-  // Automatisch zurück zu den Einstellungen: fokussiert eine bereits offene
-  // Options-Seite oder öffnet sie neu — wichtig, falls das Popup beim Öffnen
-  // des Login-Tabs bereits geschlossen wurde.
-  chrome.runtime.openOptionsPage();
-}
-
-chrome.runtime.onMessage.addListener((msg) => {
-  if (msg.type === 'merlin:startLoginPoll') {
-    startBackgroundLoginPoll(msg);
-    return Promise.resolve({ ok: true });
-  }
-  if (msg.type === 'merlin:cancelLoginPoll') {
-    cancelBackgroundLoginPoll();
-    return Promise.resolve({ ok: true });
-  }
-});
 
 // ─── Context menu click ───────────────────────────────────────────────────────
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-  const isLink = info.menuItemId === MENU_ID_LINK;
-  const isPage = info.menuItemId === MENU_ID_PAGE;
+  const { menuItemId } = info;
+  const isLink   = menuItemId === MENU_ID_LINK || menuItemId === MENU_ID_LINK_TAGS;
+  const isPage   = menuItemId === MENU_ID_PAGE || menuItemId === MENU_ID_PAGE_TAGS;
+  const withTags = menuItemId === MENU_ID_LINK_TAGS || menuItemId === MENU_ID_PAGE_TAGS;
   if (!isLink && !isPage) return;
 
+  // tab.url is available through activeTab (granted by the context-menu
+  // click), so no tabs permission is needed.
   const url   = isLink ? info.linkUrl : tab?.url;
   const tabId = tab?.id;
   if (!url) return;
 
-  const { nextcloudUrl, username, appPassword, backendKind } = await chrome.storage.local.get([
-    'nextcloudUrl', 'username', 'appPassword', 'backendKind',
-  ]);
+  const creds = await getCredentials();
+  const { nextcloudUrl, username, appPassword } = creds;
 
   // No credentials yet → show flyout + open settings
   if (!nextcloudUrl || !username || !appPassword) {
@@ -211,101 +404,233 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     return;
   }
 
-  // Host permission ist seit dem Permissions-Fix nur noch optional und auf die
-  // konkrete Nextcloud-Origin beschränkt (statt <all_urls>) — wird normalerweise
-  // schon beim Login in den Optionen erteilt. Hier als Absicherung erneut prüfen,
-  // z. B. falls der Nutzer die Berechtigung zwischenzeitlich entzogen hat. Der
-  // Klick auf den Kontextmenü-Eintrag ist die User-Geste, die den Request erlaubt.
+  // Older installs may still have an http:// URL stored.
+  if (!isAllowedServerUrl(nextcloudUrl)) {
+    await injectFlyout(tabId, t('flyout_httpBlocked'), 'error');
+    chrome.runtime.openOptionsPage();
+    return;
+  }
+
+  // The host permission is optional and limited to the configured server's
+  // origin; it is granted on login in the options page. It is not requested
+  // here: permissions.request() needs a user gesture, which the awaits above
+  // have already used up. So only check it and point the user to the
+  // settings if it is missing (e.g. revoked in chrome://extensions).
   const origin = originPatternFor(nextcloudUrl);
   if (origin && !(await chrome.permissions.contains({ origins: [origin] }))) {
-    const granted = await chrome.permissions.request({ origins: [origin] }).catch(() => false);
-    if (!granted) {
-      await injectFlyout(tabId, t('notification_needsPermission'), 'error');
-      return;
-    }
+    await injectFlyout(tabId, t('notification_needsPermission'), 'error');
+    chrome.runtime.openOptionsPage();
+    return;
   }
 
-  // Show loading flyout immediately
-  await injectFlyout(tabId, t('flyout_saving'), 'loading');
+  // ── Direct save (no dialog) ─────────────────────────────────────────────────
+  if (!withTags) {
+    await injectFlyout(tabId, t('flyout_saving'), 'loading');
 
-  // For page saves, capture the current rendered HTML so the server can skip its
-  // own HTTP fetch (works for paywalled and JS-rendered pages).
-  // For link saves the server fetches the target URL directly — no HTML needed.
-  // Both backends accept the html field (merlin-server's /api/articles gained
-  // the same extractFromHtml() wiring as Nextcloud's /api/v1/add).
-  let html = null;
-  if (isPage && tabId != null) {
-    try {
-      const results = await chrome.scripting.executeScript({
-        target: { tabId },
-        func: () => document.documentElement.outerHTML,
-      });
-      html = results?.[0]?.result ?? null;
-    } catch {
-      // Scripting blocked (privileged page, PDF viewer, etc.) — fall back to URL-only.
-    }
+    // For page saves, send the rendered HTML so the server can skip its own
+    // fetch (paywalled and JS-rendered pages). Link saves are fetched by the
+    // server directly.
+    const html = isPage ? await captureTabHtml(tabId) : null;
+    await saveToMerlin({ ...creds, url, html, tabId, tags: [] });
+    return;
   }
 
-  await saveToMerlin({ nextcloudUrl, username, appPassword, backendKind, url, html, tabId });
+  // ── Save with tags — open dialog ────────────────────────────────────────────
+  const saveId = crypto.randomUUID();
+  const key    = pendingSaveKey(saveId);
+  await chrome.storage.local.set({ [key]: { url, tabId, isPage, windowId: null } });
+
+  try {
+    const win = await openSaveDialog(saveId, tab?.windowId);
+    // Record the window ID so windows.onRemoved can clean up the entry. If
+    // the dialog has already saved in the meantime, the entry is gone and is
+    // not recreated.
+    const { [key]: pending } = await chrome.storage.local.get(key);
+    if (pending) await chrome.storage.local.set({ [key]: { ...pending, windowId: win.id } });
+  } catch {
+    // Fallback: save directly if window creation fails
+    await chrome.storage.local.remove(key);
+    await injectFlyout(tabId, t('flyout_saving'), 'loading');
+    const html = isPage ? await captureTabHtml(tabId) : null;
+    await saveToMerlin({ ...creds, url, html, tabId, tags: [] });
+  }
 });
+
+// ─── Dialog window ────────────────────────────────────────────────────────────
+
+async function openSaveDialog(saveId, browserWindowId) {
+  const opts = {
+    url:  chrome.runtime.getURL(`save-dialog.html?id=${encodeURIComponent(saveId)}`),
+    type: 'popup',
+    ...SAVE_DIALOG_SIZE,
+  };
+  const pos = await centeredPosition(SAVE_DIALOG_SIZE, browserWindowId);
+  if (pos) {
+    try {
+      return await chrome.windows.create({ ...opts, ...pos });
+    } catch {
+      // Chrome rejects bounds that are less than half on screen (browser
+      // window partly off-screen) — then let Chrome place the dialog.
+    }
+  }
+  return chrome.windows.create(opts);
+}
+
+// Centers a window of `size` over the browser window the click came from. A
+// service worker has no `screen` object, so the browser window is the only
+// reference — on a maximized window that is the middle of its screen anyway.
+// Returns null (Chrome's default placement) when the window is unknown.
+async function centeredPosition(size, windowId) {
+  let browserWin = null;
+  try {
+    browserWin = windowId != null
+      ? await chrome.windows.get(windowId)
+      : await chrome.windows.getLastFocused();
+  } catch { /* ignore */ }
+
+  if (!(browserWin?.width > 0 && browserWin?.height > 0)) return null;
+  return {
+    left: Math.round(browserWin.left + Math.max(0, (browserWin.width  - size.width)  / 2)),
+    top:  Math.round(browserWin.top  + Math.max(0, (browserWin.height - size.height) / 2)),
+  };
+}
 
 // ─── API call ─────────────────────────────────────────────────────────────────
 
-async function saveToMerlin({ nextcloudUrl, username, appPassword, backendKind, url, html, tabId }) {
-  // merlin-server hat keine Pocket-kompatible Extension-API (/api/v1/add) -
-  // stattdessen wird der native Endpunkt genutzt, den auch die Leseliste
-  // (library.php) zum Hinzufügen nutzt.
-  const apiUrl = backendKind === 'standalone'
-    ? `${nextcloudUrl.replace(/\/$/, '')}/api/articles`
-    : `${nextcloudUrl.replace(/\/$/, '')}/index.php/apps/merlin/api/v1/add`;
-  const creds  = btoa(`${username}:${appPassword}`);
+// merlin-server has no Pocket-style extension API (/api/v1/add) that resolves
+// tag names on the server, so tag IDs are resolved (or created) here via
+// /api/tags first. Also returns the names that could not be applied, so the
+// toast can report them honestly.
+async function resolveTagIdsStandalone(nextcloudUrl, authHeader, tagNames) {
+  if (!tagNames || tagNames.length === 0) return { ids: [], failed: [] };
 
-  const body = html ? { url, html } : { url };
+  const endpoint = tagsEndpoint(nextcloudUrl, 'standalone');
+  const headers  = { 'Authorization': authHeader, 'Content-Type': 'application/json' };
+
+  // Without the existing tag list every tag would be created again as a
+  // duplicate — rather apply none and report that.
+  let existing;
+  try {
+    const resp = await fetch(endpoint, {
+      method: 'GET',
+      headers,
+      signal: AbortSignal.timeout(TAGS_TIMEOUT_MS),
+    });
+    if (!resp.ok) return { ids: [], failed: [...tagNames] };
+    existing = normalizeTagList(await resp.json());
+  } catch {
+    return { ids: [], failed: [...tagNames] };
+  }
+
+  const ids = [];
+  const failed = [];
+  for (const name of tagNames) {
+    const match = existing.find(tag => String(tag.name).toLowerCase() === name.toLowerCase());
+    if (match) {
+      ids.push(match.id);
+      continue;
+    }
+    try {
+      const resp = await fetch(endpoint, {
+        method: 'POST',
+        headers,
+        body:   JSON.stringify({ name }),
+        signal: AbortSignal.timeout(TAGS_TIMEOUT_MS),
+      });
+      if (!resp.ok) { failed.push(name); continue; }
+      const created = await resp.json();
+      ids.push(created.id);
+      existing.push(created);
+    } catch {
+      failed.push(name);
+    }
+  }
+  return { ids, failed };
+}
+
+async function saveToMerlin({ nextcloudUrl, username, appPassword, backendKind, url, html, tabId, tags = [] }) {
+  if (!isAllowedServerUrl(nextcloudUrl)) {
+    await injectFlyout(tabId, t('flyout_httpBlocked'), 'error');
+    return;
+  }
+
+  const authHeader = basicAuthHeader(username, appPassword);
+  let failedTags = [];
+
+  let apiUrl, body;
+  if (backendKind === 'standalone') {
+    // merlin-server uses its native /api/articles endpoint, which accepts html
+    // exactly like the Nextcloud app's /api/v1/add below.
+    apiUrl = `${serverBase(nextcloudUrl)}/api/articles`;
+    const { ids: tagIds, failed } = await resolveTagIdsStandalone(nextcloudUrl, authHeader, tags);
+    failedTags = failed;
+    body = tagIds.length > 0 ? { url, tagIds } : { url };
+  } else {
+    apiUrl = `${serverBase(nextcloudUrl)}/index.php/apps/merlin/api/v1/add`;
+    body = { url };
+    if (tags && tags.length > 0) body.tags = tags;
+  }
+  if (html) body.html = html;
 
   let response;
   try {
     response = await fetch(apiUrl, {
       method:  'POST',
       headers: {
-        'Authorization': `Basic ${creds}`,
+        'Authorization': authHeader,
         'Content-Type':  'application/json',
       },
-      body: JSON.stringify(body),
+      body:   JSON.stringify(body),
+      signal: AbortSignal.timeout(SAVE_TIMEOUT_MS),
     });
   } catch (networkError) {
-    await injectFlyout(tabId, t('flyout_connectionFailed', [networkError.message]), 'error');
+    const message = networkError?.name === 'TimeoutError'
+      ? t('flyout_timeout')
+      : t('flyout_connectionFailed', [networkError.message]);
+    await injectFlyout(tabId, message, 'error');
     return;
   }
 
   if (response.status === 401) {
-    // Credentials sind ungültig/abgelaufen — löschen, damit der Nutzer den
-    // Login Flow v2 erneut durchlaufen muss statt mit toten Daten weiterzuarbeiten.
-    await chrome.storage.local.remove(['nextcloudUrl', 'username', 'appPassword', 'encPassphrase']);
-    // Verschlüsselte Sync-Kopie ebenfalls löschen — das App-Passwort ist tot.
-    try { await chrome.storage.sync.remove('credEnc'); } catch { /* sync evtl. nicht verfügbar */ }
-    await chrome.notifications.create({
-      type:    'basic',
-      iconUrl: chrome.runtime.getURL('icons/icon-48.png'),
-      title:   t('notification_defaultTitle'),
-      message: t('notification_authFailedMessage'),
-    });
-    await injectFlyout(tabId, t('flyout_authFailed'), 'error');
+    const cleared = await recordAuthFailure();
+    await injectFlyout(tabId, cleared ? t('flyout_authFailed') : t('flyout_authFailedRetry'), 'error');
     return;
   }
   if (!response.ok) {
+    // The Nextcloud backend rejects known unscrapable domains (see
+    // content-filters/$unsupported.xml there) synchronously. merlin-server
+    // may not know this error shape (yet) — then the generic branch applies.
+    let payload = null;
+    try { payload = await response.clone().json(); } catch { /* no JSON body */ }
+    if (payload && payload.error === 'unsupported_site' && payload.domain) {
+      await injectFlyout(tabId, t('flyout_unsupportedSite', [payload.domain]), 'error');
+      return;
+    }
     await injectFlyout(tabId, t('flyout_serverError', [String(response.status)]), 'error');
     return;
   }
 
+  await resetAuthFailures();
+
   // Show success immediately — the link has been handed off to the server.
   // Content extraction runs asynchronously; no need to wait for it here.
-  await injectFlyout(tabId, t('flyout_addedToReadingList'), 'success');
+  let message;
+  if (failedTags.length > 0) {
+    message = t('flyout_articleAddedTagsFailed', [failedTags.join(', ')]);
+  } else if (tags && tags.length > 0) {
+    message = t('flyout_articleAddedWithTags', [tags.join(', ')]);
+  } else {
+    message = t('flyout_addedToReadingList');
+  }
+  await injectFlyout(tabId, message, 'success');
 }
 
 // ─── Flyout injection ─────────────────────────────────────────────────────────
 //
 // Injects a small toast into the current page via chrome.scripting.
-// Falls back to a browser notification on privileged pages (about:*, etc.).
+// Falls back to a desktop notification on pages where extensions cannot run
+// scripts (chrome://, the Chrome Web Store, the PDF viewer) and on documents
+// where the toast cannot be rendered.
 
 async function injectFlyout(tabId, message, state) {
   if (tabId == null) { await fallbackNotify(state, message); return; }
@@ -313,162 +638,167 @@ async function injectFlyout(tabId, message, state) {
   const logoUrl = await getLogoDataUrl();
 
   try {
-    await chrome.scripting.executeScript({
+    const results = await chrome.scripting.executeScript({
       target: { tabId },
       func:   renderFlyout,
       args:   [message, state, logoUrl],
     });
+    if (results?.[0]?.result !== true) await fallbackNotify(state, message);
   } catch {
-    // Scripting blocked (privileged page, pdf viewer, etc.)
     await fallbackNotify(state, message);
   }
 }
 
-// This function runs INSIDE the page context — must be fully self-contained.
+// This function runs INSIDE the page context — it must be fully
+// self-contained. The toast lives in a closed shadow root so page CSS cannot
+// restyle it and page scripts cannot reach into it. Returns true when the
+// toast was rendered.
 function renderFlyout(message, state, logoUrl) {
-  const ID      = '__merlin_ext_flyout__';
-  const STYLE_ID = '__merlin_ext_styles__';
+  const HOST_ID = '__merlin_ext_flyout_host__';
+  const XHTML   = 'http://www.w3.org/1999/xhtml';
+  const root    = document.documentElement;
+  if (!root) return false;
 
-  // Inject keyframe animation once
-  if (!document.getElementById(STYLE_ID)) {
-    const s = document.createElement('style');
-    s.id = STYLE_ID;
-    s.textContent = `
-      @keyframes __merlin_spin { to { transform: rotate(360deg); } }
-      @keyframes __merlin_in   { from { opacity:0; transform:translateY(-10px) } to { opacity:1; transform:translateY(0) } }
+  const el = (tag) => document.createElementNS(XHTML, tag);
+
+  let host = document.getElementById(HOST_ID);
+  // The shadow root reference is stored as an expando on the host. Expandos
+  // set from the extension's isolated world are not visible to page scripts.
+  let shadow = host?.__merlinShadow;
+  if (!host || !shadow) {
+    host?.remove();
+    // A custom element name keeps generic page selectors like `div { … }` off
+    // the host, and !important inline declarations win over any remaining
+    // page rules (inline beats stylesheets at equal importance).
+    host = el('merlin-toast');
+    host.id = HOST_ID;
+    host.style.cssText = [
+      'all: initial',
+      'display: block',
+      'position: fixed',
+      'top: 24px',
+      'right: 24px',
+      'z-index: 2147483647',
+      'visibility: visible',
+      'opacity: 1',
+    ].map(rule => `${rule} !important`).join('; ');
+    try {
+      shadow = host.attachShadow({ mode: 'closed' });
+    } catch {
+      return false;
+    }
+    host.__merlinShadow = shadow;
+
+    const style = el('style');
+    style.textContent = `
+      @keyframes spin { to { transform: rotate(360deg); } }
+      @keyframes slide-in { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+      .flyout {
+        display: flex; align-items: center; gap: 11px;
+        background: #fff; border: 1px solid #e0e4ea; border-radius: 13px;
+        box-shadow: 0 6px 24px rgba(0,0,0,0.13);
+        padding: 13px 16px; min-width: 230px; max-width: 340px; box-sizing: border-box;
+        font: 13px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        animation: slide-in 0.2s ease both;
+        transition: opacity 0.25s ease, transform 0.25s ease;
+      }
+      .flyout.hiding { opacity: 0; transform: translateY(-10px); }
+      .logo { flex-shrink: 0; position: relative; width: 50px; height: 50px; }
+      .logo img { width: 50px; height: 50px; border-radius: 10px; display: block; }
+      .badge {
+        position: absolute; bottom: -4px; right: -4px; background: #fff;
+        border-radius: 50%; width: 20px; height: 20px;
+        display: flex; align-items: center; justify-content: center;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.18);
+        font-size: 12px; font-weight: 700; line-height: 1;
+      }
+      .badge.success { color: #256029; }
+      .badge.error   { color: #9b1c1c; }
+      .spinner {
+        width: 12px; height: 12px; box-sizing: border-box;
+        border: 2px solid #0082c9; border-top-color: transparent;
+        border-radius: 50%; animation: spin 0.75s linear infinite;
+      }
+      .text { flex: 1; min-width: 0; }
+      .label {
+        font-weight: 700; color: #0082c9; font-size: 12px;
+        letter-spacing: .03em; text-transform: uppercase; margin-bottom: 2px;
+      }
+      .message { color: #444; overflow: hidden; text-overflow: ellipsis; }
     `;
-    document.head.appendChild(s);
+    shadow.appendChild(style);
+    root.appendChild(host);
   }
 
-  let flyout = document.getElementById(ID);
-  if (!flyout) {
-    flyout = document.createElement('div');
-    flyout.id = ID;
-    Object.assign(flyout.style, {
-      position:      'fixed',
-      top:           '24px',
-      right:         '24px',
-      zIndex:        '2147483647',
-      display:       'flex',
-      alignItems:    'center',
-      gap:           '11px',
-      background:    '#fff',
-      border:        '1px solid #e0e4ea',
-      borderRadius:  '13px',
-      boxShadow:     '0 6px 24px rgba(0,0,0,0.13)',
-      padding:       '13px 16px',
-      minWidth:      '230px',
-      maxWidth:      '340px',
-      fontFamily:    "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif",
-      fontSize:      '13px',
-      lineHeight:    '1.4',
-      animation:     '__merlin_in 0.2s ease both',
-      transition:    'opacity 0.25s ease, transform 0.25s ease',
-    });
-    document.body.appendChild(flyout);
+  // Remove the previous toast (and its auto-hide timer) when updating
+  const previous = shadow.querySelector('.flyout');
+  if (previous) {
+    clearTimeout(previous.__hideTimer);
+    previous.remove();
   }
 
-  // Clear auto-hide timer if updating
-  clearTimeout(flyout.__hideTimer);
+  // Build the content via the DOM API (no innerHTML with dynamic values)
+  const flyout = el('div');
+  flyout.className = 'flyout';
+  flyout.setAttribute('role', 'status');
 
-  // Build flyout content via DOM API (avoids unsafe innerHTML with dynamic values)
-  flyout.replaceChildren();
+  const logo = el('div');
+  logo.className = 'logo';
+  if (logoUrl) {
+    const img = el('img');
+    img.alt = 'Merlin';
+    // A strict img-src CSP on the page can block the data: URL — then just
+    // hide the image instead of showing a broken-image icon.
+    img.addEventListener('error', () => { img.style.visibility = 'hidden'; });
+    img.src = logoUrl;
+    logo.appendChild(img);
+  }
 
-  // Left column: logo + state badge
-  const logoWrap = Object.assign(document.createElement('div'), {});
-  Object.assign(logoWrap.style, { flexShrink:'0', position:'relative', width:'50px', height:'50px' });
-
-  const img = document.createElement('img');
-  img.src = logoUrl;
-  img.alt = 'Merlin';
-  Object.assign(img.style, { width:'50px', height:'50px', borderRadius:'10px', display:'block' });
-  logoWrap.appendChild(img);
-
-  const badgeWrap = document.createElement('div');
-  Object.assign(badgeWrap.style, {
-    position:'absolute', bottom:'-4px', right:'-4px', background:'#fff',
-    borderRadius:'50%', width:'20px', height:'20px',
-    display:'flex', alignItems:'center', justifyContent:'center',
-    boxShadow:'0 1px 4px rgba(0,0,0,0.18)',
-  });
-
-  const badgeEl = document.createElement('div');
+  const badge = el('div');
+  badge.className = `badge ${state}`;
   if (state === 'success') {
-    badgeEl.textContent = '✓';
-    Object.assign(badgeEl.style, { color:'#256029', fontSize:'12px', fontWeight:'700', lineHeight:'1' });
+    badge.textContent = '✓';
   } else if (state === 'error') {
-    badgeEl.textContent = '✕';
-    Object.assign(badgeEl.style, { color:'#9b1c1c', fontSize:'12px', fontWeight:'700', lineHeight:'1' });
+    badge.textContent = '✕';
   } else {
-    // loading spinner
-    Object.assign(badgeEl.style, {
-      width:'12px', height:'12px',
-      border:'2px solid #0082c9', borderTopColor:'transparent',
-      borderRadius:'50%', animation:'__merlin_spin 0.75s linear infinite',
-    });
+    const spinner = el('div');
+    spinner.className = 'spinner';
+    badge.appendChild(spinner);
   }
-  badgeWrap.appendChild(badgeEl);
-  logoWrap.appendChild(badgeWrap);
-  flyout.appendChild(logoWrap);
+  logo.appendChild(badge);
+  flyout.appendChild(logo);
 
-  // Right column: label + message
-  const textCol = document.createElement('div');
-  Object.assign(textCol.style, { flex:'1', minWidth:'0' });
-
-  const label = document.createElement('div');
+  const text = el('div');
+  text.className = 'text';
+  const label = el('div');
+  label.className = 'label';
   label.textContent = 'Merlin';
-  Object.assign(label.style, {
-    fontWeight:'700', color:'#0082c9', fontSize:'12px',
-    letterSpacing:'.03em', textTransform:'uppercase', marginBottom:'2px',
-  });
-  textCol.appendChild(label);
-
-  const msgEl = document.createElement('div');
+  const msgEl = el('div');
+  msgEl.className = 'message';
   msgEl.textContent = message;
-  Object.assign(msgEl.style, { color:'#444', overflow:'hidden', textOverflow:'ellipsis' });
-  textCol.appendChild(msgEl);
+  text.append(label, msgEl);
+  flyout.appendChild(text);
 
-  flyout.appendChild(textCol);
+  shadow.appendChild(flyout);
 
   // Auto-dismiss after 3.5 s for finished states
   if (state !== 'loading') {
     flyout.__hideTimer = setTimeout(() => {
-      flyout.style.opacity   = '0';
-      flyout.style.transform = 'translateY(-10px)';
-      setTimeout(() => flyout.remove(), 280);
+      flyout.classList.add('hiding');
+      setTimeout(() => {
+        flyout.remove();
+        if (!shadow.querySelector('.flyout')) host.remove();
+      }, 280);
     }, 3500);
   }
+  return true;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+// Desktop notification instead of the toast. A "saving…" notification would
+// only linger next to the final result, so the loading state is skipped.
 function fallbackNotify(state, message) {
-  const titles = {
-    success: t('notification_savedTitle'),
-    error:   t('notification_errorTitle'),
-    loading: t('notification_loadingTitle'),
-  };
-  return chrome.notifications.create({
-    type:    'basic',
-    iconUrl: chrome.runtime.getURL('icons/icon-48.png'),
-    title:   titles[state] ?? t('notification_defaultTitle'),
-    message,
-  });
-}
-
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-// host_permissions ist nur noch optional (manifest.json) und auf die jeweils
-// konfigurierte Nextcloud-Origin beschränkt — diese Helper-Funktion baut das
-// Match-Pattern dafür. Duplikat von options.js: separate Skript-Kontexte ohne
-// gemeinsames Modul-System, daher keine sinnvolle gemeinsame Datei dafür.
-function originPatternFor(url) {
-  try {
-    const u = new URL(url);
-    return `${u.protocol}//${u.host}/*`;
-  } catch {
-    return null;
-  }
+  if (state === 'loading') return Promise.resolve();
+  return showNotification(message);
 }

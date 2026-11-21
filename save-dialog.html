@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en" data-i18n-title="saveDialog_pageTitle">
+<head>
+  <meta charset="UTF-8">
+  <title>Merlin — Save article</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+                   'Helvetica Neue', Arial, sans-serif;
+      background: #f0f2f5;
+      color: #222;
+      min-height: 100vh;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 16px;
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 14px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.10);
+      padding: 22px 24px 20px;
+      width: 100%;
+      max-width: 420px;
+    }
+
+    /* Header */
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+    .header img {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      flex-shrink: 0;
+    }
+    .header h1 {
+      font-size: 15px;
+      font-weight: 700;
+      color: #0082c9;
+    }
+    .header p {
+      font-size: 11px;
+      color: #999;
+      margin-top: 1px;
+    }
+
+    /* URL display */
+    .url-row {
+      background: #f4f6f9;
+      border-radius: 8px;
+      padding: 8px 11px;
+      font-size: 12px;
+      color: #555;
+      margin-bottom: 16px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* Tag input field */
+    .field {
+      margin-bottom: 14px;
+    }
+    .field label {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      color: #444;
+      margin-bottom: 5px;
+    }
+    .field input {
+      width: 100%;
+      padding: 9px 12px;
+      font-size: 13px;
+      border: 1.5px solid #dde1e7;
+      border-radius: 8px;
+      background: #f8f9fa;
+      color: #222;
+      outline: none;
+      transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+    }
+    .field input:focus {
+      border-color: #0082c9;
+      background: #fff;
+      box-shadow: 0 0 0 3px rgba(0, 130, 201, 0.12);
+    }
+    .field .hint {
+      font-size: 11px;
+      color: #aaa;
+      margin-top: 4px;
+    }
+
+    /* Existing tag suggestions */
+    .tags-section {
+      margin-bottom: 16px;
+    }
+    .tags-section-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: #999;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .tags-spinner {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border: 1.5px solid #ccc;
+      border-top-color: #0082c9;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      flex-shrink: 0;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .tag-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      min-height: 28px;
+    }
+    /* Existing tags as an indented tree (sub-tags below their parent) */
+    .tag-tree {
+      flex-direction: column;
+      flex-wrap: nowrap;
+      gap: 0;
+      max-height: 196px;
+      overflow-y: auto;
+      border: 1.5px solid #dde1e7;
+      border-radius: 8px;
+      padding: 4px 0;
+    }
+    .tag-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      flex-shrink: 0;
+      padding: 5px 10px;
+      border: none;
+      background: transparent;
+      color: #333;
+      font: inherit;
+      font-size: 12.5px;
+      text-align: left;
+      cursor: pointer;
+      transition: background 0.12s;
+    }
+    .tag-row:hover {
+      background: #e8f3fb;
+    }
+    .tag-row:focus-visible {
+      outline: 2px solid #0082c9;
+      outline-offset: -2px;
+    }
+    .tag-check {
+      position: relative;
+      width: 15px;
+      height: 15px;
+      flex-shrink: 0;
+      border: 1.5px solid #b8bfc8;
+      border-radius: 50%;
+      background: #fff;
+      transition: background 0.12s, border-color 0.12s;
+    }
+    .tag-row.selected .tag-check {
+      background: #0082c9;
+      border-color: #0082c9;
+    }
+    .tag-row.selected .tag-check::after {
+      content: '';
+      position: absolute;
+      left: 4px;
+      top: 1.5px;
+      width: 3.5px;
+      height: 7px;
+      border: solid #fff;
+      border-width: 0 1.5px 1.5px 0;
+      transform: rotate(45deg);
+    }
+    .tag-row.selected .tag-name {
+      color: #0082c9;
+      font-weight: 600;
+    }
+    .tag-row[hidden] {
+      display: none;
+    }
+    .tag-row.context-only .tag-name {
+      color: #999;
+    }
+    .tag-row.selected.context-only .tag-name {
+      color: #0082c9;
+    }
+    .tags-no-match {
+      padding: 5px 10px;
+    }
+    .tag-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .tags-empty {
+      font-size: 12px;
+      color: #bbb;
+      font-style: italic;
+    }
+    .tags-error {
+      font-size: 11px;
+      color: #c0392b;
+    }
+
+    /* Divider */
+    .divider {
+      height: 1px;
+      background: #eaecef;
+      margin: 16px 0;
+    }
+
+    /* Buttons */
+    .actions {
+      display: flex;
+      gap: 8px;
+    }
+    .btn {
+      flex: 1;
+      padding: 9px 14px;
+      border: none;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s, box-shadow 0.15s;
+    }
+    .btn-cancel {
+      background: #eef0f3;
+      color: #555;
+    }
+    .btn-cancel:hover { background: #e0e3e8; }
+    .btn-save {
+      background: #0082c9;
+      color: #fff;
+    }
+    .btn-save:hover {
+      background: #006fab;
+      box-shadow: 0 2px 8px rgba(0, 130, 201, 0.3);
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+
+    <div class="header">
+      <img src="icons/icon-128.png" alt="">
+      <div>
+        <h1>Merlin</h1>
+        <p data-i18n="saveDialog_subtitle">Add article to reading list</p>
+      </div>
+    </div>
+
+    <div class="url-row" id="urlDisplay" title=""></div>
+
+    <!-- Tag input -->
+    <div class="field">
+      <label for="tagsInput"><span data-i18n="saveDialog_tagsLabel">Tags</span> <span style="font-weight:400;color:#aaa" data-i18n="saveDialog_optional">(optional)</span></label>
+      <input
+        type="text"
+        id="tagsInput"
+        placeholder="e.g. tech, news, reading"
+        data-i18n-placeholder="saveDialog_tagsPlaceholder"
+        autocomplete="off"
+        spellcheck="false">
+      <p class="hint" data-i18n="saveDialog_tagsHint">Separate multiple tags with commas</p>
+    </div>
+
+    <!-- Existing tag suggestions -->
+    <div class="tags-section" id="tagsSection">
+      <div class="tags-section-label">
+        <span data-i18n="saveDialog_existingTags">Existing tags</span>
+        <span class="tags-spinner" id="tagsSpinner"></span>
+      </div>
+      <div class="tag-chips" id="tagChips"></div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="actions">
+      <button class="btn btn-cancel" id="cancelBtn" type="button" data-i18n="saveDialog_cancel">Cancel</button>
+      <button class="btn btn-save"   id="saveBtn"   type="button" data-i18n="saveDialog_save">Save</button>
+    </div>
+
+  </div>
+
+  <script src="crypto.js"></script>
+  <script src="common.js"></script>
+  <script src="i18n.js"></script>
+  <script src="save-dialog.js"></script>
+</body>
+</html>

@@ -2,15 +2,14 @@
 
 // ─── Merlin Credential Encryption ────────────────────────────────────────────
 //
-// Schutzziel: storage.sync darf das Nextcloud-App-Passwort nur noch als
-// Chiffretext enthalten, niemals im Klartext. Der AES-Schlüssel wird per
-// PBKDF2 aus einer Passphrase abgeleitet, die NIE synchronisiert wird —
-// sie lebt ausschließlich in storage.local (pro Gerät). Ohne diese
-// Passphrase ist der in storage.sync liegende Chiffretext für einen
-// Angreifer auf dem Sync-Server (Mozilla/Google) wertlos.
+// Goal: storage.sync may only ever hold the app password as ciphertext,
+// never as plain text. The AES key is derived via PBKDF2 from a passphrase
+// that is NEVER synced — it lives in storage.local on each device only.
+// Without it, the ciphertext in storage.sync is worthless to anyone with
+// access to the sync servers.
 //
-// Nur in options.js verwendet (dort wird ver-/entschlüsselt); background.js
-// braucht diese Datei nicht, da es nur storage.local/.sync-Keys löscht.
+// Used by common.js (setCredentials keeps the synced copy current) and by
+// options.js (enabling sync, unlocking a synced login on a new device).
 
 const MERLIN_PBKDF2_ITERATIONS = 200000;
 
@@ -39,15 +38,15 @@ async function merlinDeriveKey(passphrase, saltBytes) {
   );
 }
 
-// credsObj: { nextcloudUrl, username, appPassword }
+// credsObj: { nextcloudUrl, username, appPassword, backendKind }
 async function merlinEncryptCredentials(passphrase, credsObj) {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const iv   = crypto.getRandomValues(new Uint8Array(12));
   const key  = await merlinDeriveKey(passphrase, salt);
   const plaintext  = new TextEncoder().encode(JSON.stringify(credsObj));
   const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext);
-  // salt/iv sind nicht geheim (Standard bei AES-GCM) — dürfen mit dem
-  // Chiffretext zusammen in storage.sync liegen.
+  // Salt and IV are not secret (standard for AES-GCM) and may sit next to
+  // the ciphertext in storage.sync.
   return {
     v:          1,
     salt:       _merlinToBase64(salt),
